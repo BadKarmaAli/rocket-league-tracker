@@ -6,33 +6,45 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configuration
-PLAYER_ID = os.getenv("PLAYER_ID", "ali-_-032")
-PLATFORM = os.getenv("PLATFORM", "psn")
+# Configuration - Support multiple accounts
+ACCOUNTS = [
+    {
+        "player_id": os.getenv("PLAYER_ID_1", "ali-_-032"),
+        "platform": os.getenv("PLATFORM_1", "psn"),
+    },
+    {
+        "player_id": os.getenv("PLAYER_ID_2", ""),
+        "platform": os.getenv("PLATFORM_2", "psn"),
+    },
+    {
+        "player_id": os.getenv("PLAYER_ID_3", ""),
+        "platform": os.getenv("PLATFORM_3", "psn"),
+    }
+]
+
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "300"))
 
-TRACKER_API_URL = f"https://api.tracker.gg/api/v2/rocket-league/standard/profile/{PLATFORM}/{PLAYER_ID}"
+last_game_counts = {}
 
-last_game_count = None
-
-def get_player_stats():
+def get_player_stats(player_id, platform):
     """Fetch player stats from Rocket League Tracker"""
+    tracker_api_url = f"https://api.tracker.gg/api/v2/rocket-league/standard/profile/{platform}/{player_id}"
     headers = {
         "User-Agent": "Mozilla/5.0"
     }
     try:
-        response = requests.get(TRACKER_API_URL, headers=headers)
+        response = requests.get(tracker_api_url, headers=headers)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching player data: {e}")
+        print(f"Error fetching {player_id} data: {e}")
         return None
 
-def send_discord_notification(game_info):
+def send_discord_notification(player_id, game_info):
     """Send notification to Discord webhook"""
     embed = {
-        "title": f"🎮 {PLAYER_ID} just played a game!",
+        "title": f"🎮 {player_id} just played a game!",
         "description": f"Game Time: {game_info.get('timestamp', 'N/A')}",
         "color": 3447003,
         "fields": [
@@ -59,38 +71,43 @@ def send_discord_notification(game_info):
     try:
         response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
         response.raise_for_status()
-        print(f"Discord notification sent: {game_info.get('timestamp')}")
+        print(f"Discord notification sent for {player_id}: {game_info.get('timestamp')}")
     except requests.exceptions.RequestException as e:
         print(f"Error sending Discord notification: {e}")
 
-def monitor_player():
-    """Main monitoring loop"""
-    global last_game_count
+def monitor_players():
+    """Main monitoring loop for all accounts"""
+    print(f"Starting to monitor {len([a for a in ACCOUNTS if a['player_id']])} accounts...")
     
-    print(f"Starting to monitor {PLAYER_ID}...")
-    print(f"Check interval: {CHECK_INTERVAL} seconds")
+    # Filter out empty accounts
+    active_accounts = [a for a in ACCOUNTS if a['player_id']]
     
     while True:
         try:
-            data = get_player_stats()
-            
-            if data and "data" in data:
-                player_data = data["data"]
-                stats = player_data.get("stats", {})
+            for account in active_accounts:
+                player_id = account['player_id']
+                platform = account['platform']
                 
-                current_game_count = stats.get("matchesPlayed", {}).get("value", 0)
+                data = get_player_stats(player_id, platform)
                 
-                if last_game_count is not None and current_game_count > last_game_count:
-                    game_info = {
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "playlist": "Competitive",
-                        "result": "Win/Loss",
-                        "points": 0
-                    }
-                    send_discord_notification(game_info)
-                
-                last_game_count = current_game_count
-                print(f"[{datetime.now()}] Checked - Games played: {current_game_count}")
+                if data and "data" in data:
+                    player_data = data["data"]
+                    stats = player_data.get("stats", {})
+                    
+                    current_game_count = stats.get("matchesPlayed", {}).get("value", 0)
+                    
+                    # Check if new game was played
+                    if player_id in last_game_counts and current_game_count > last_game_counts[player_id]:
+                        game_info = {
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "playlist": "Competitive",
+                            "result": "Win/Loss",
+                            "points": 0
+                        }
+                        send_discord_notification(player_id, game_info)
+                    
+                    last_game_counts[player_id] = current_game_count
+                    print(f"[{datetime.now()}] {player_id} - Games played: {current_game_count}")
             
             time.sleep(CHECK_INTERVAL)
             
@@ -103,4 +120,4 @@ if __name__ == "__main__":
         print("ERROR: DISCORD_WEBHOOK_URL environment variable not set!")
         exit(1)
     
-    monitor_player()
+    monitor_players()
